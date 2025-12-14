@@ -1,0 +1,422 @@
+// =====================================================
+// Dress-UP My Avatar! — Sliced items; click-to-add disabled
+// =====================================================
+
+let W = 720;
+let STAGE_H = 520;
+let TRAY_H  = 260;
+let H = STAGE_H + TRAY_H;
+
+// Backgrounds
+let bg1, bg2, bg3;
+let currentBG;
+
+// Decor pages
+let pg1, pg2, pg3, pg4;
+let currentPageIndex = 1; // 1..4
+
+// Auto-sliced items per page index
+const itemsByPage = { 1: [], 2: [], 3: [], 4: [] };
+
+// Thumbnails rendered in the tray for the current page
+let thumbs = []; // [{img, x, y, w, h, box:{x,y,w,h}}]
+
+// Layers placed on the SIM
+let layers = []; // [{sourceOriginal, img, x,y,w,h, scale, rot, opacity}]
+let selected = null;
+let dragging = false;
+let dragOffset = { x:0, y:0 };
+
+// UI
+let scaleSlider, rotSlider, opacitySlider, whiteCutSlider;
+let btnBG1, btnBG2, btnBG3, btnP1, btnP2, btnP3, btnP4;
+let btnFront, btnBack, btnDelete, btnSave;
+
+const VERY_LIGHT_VIOLET = "#EFE3FF";
+const PANEL_PINK = "#ff8ab1";
+const EDGE = "#d8c8ff";
+
+// Tray area rect
+let trayRect = { x: 10, y: STAGE_H + 40, w: W - 20, h: TRAY_H - 60 };
+
+function preload() {
+  // Backgrounds - Ensure these files exist in your p5.js editor folder
+  bg1 = loadImage("sim-background-1.png");
+  bg2 = loadImage("sim-background-2.png");
+  bg3 = loadImage("sim-background-3.png");
+  currentBG = bg1;
+
+  // Decor sheets
+  pg1 = loadImage("character-design-1.png");
+  pg2 = loadImage("character-design-2.png");
+  pg3 = loadImage("character-design-3.png");
+  pg4 = loadImage("character-design-4.png");
+}
+
+function setup() {
+  createCanvas(W, H);
+
+  // Page styles
+  document.body.style.margin = "0";
+  document.body.style.background = VERY_LIGHT_VIOLET;
+  document.body.style.fontFamily = "system-ui, -apple-system, Segoe UI, Roboto, Arial";
+  document.body.style.color = "#333";
+
+  // Title
+  const title = createP("💖 Dress-UP My Avatar! 💖");
+  title.style("font-weight", "800");
+  title.style("font-size", "26px");
+  title.style("margin", "12px auto 6px");
+  title.style("color", PANEL_PINK);
+  title.style("text-align", "center");
+
+  // Background buttons
+  btnBG1 = makeButton("Sim 1", () => { currentBG = bg1; });
+  btnBG2 = makeButton("Sim 2", () => { currentBG = bg2; });
+  btnBG3 = makeButton("Sim 3", () => { currentBG = bg3; });
+
+  // Decor page buttons
+  btnP1 = makeButton("Decor 1", () => switchPage(1));
+  btnP2 = makeButton("Decor 2", () => switchPage(2));
+  btnP3 = makeButton("Decor 3", () => switchPage(3));
+  btnP4 = makeButton("Decor 4", () => switchPage(4));
+
+  // Sliders
+  scaleSlider   = addSlider("Scale",        0.1, 3.0, 1.0, 0.01, v => { if (selected) { selected.scale   = v; } });
+  rotSlider     = addSlider("Rotation (°)", -180, 180, 0,   1,    v => { if (selected) { selected.rot     = radians(v); } });
+  opacitySlider = addSlider("Opacity",         0, 255, 255, 1,    v => { if (selected) { selected.opacity = int(v); } });
+  whiteCutSlider= addSlider("White Cut",      200, 255, 240, 1,    v => {
+    if (selected && selected.sourceOriginal) {
+      selected.img = applyTransparency(selected.sourceOriginal, int(v));
+      selected.w = selected.img.width;
+      selected.h = selected.img.height;
+    }
+  });
+
+  // Actions
+  btnFront  = makeButton("Bring Front", () => { if (selected) bringFront(selected); });
+  btnBack   = makeButton("Send Back",   () => { if (selected) sendBack(selected); });
+  btnDelete = makeButton("Delete",      () => deleteSelected());
+  btnSave   = makeButton("Save PNG",    () => saveCanvas("dress-up-avatar", "png"));
+
+  // Center UI under canvas
+  [
+    btnBG1, btnBG2, btnBG3, btnP1, btnP2, btnP3, btnP4,
+    scaleSlider.wrap, rotSlider.wrap, opacitySlider.wrap, whiteCutSlider.wrap,
+    btnFront, btnBack, btnDelete, btnSave
+  ].forEach(el => {
+    el.style("display","inline-block");
+    el.style("margin","6px 6px");
+  });
+
+  // Auto-slice all pages
+  itemsByPage[1] = autoSlice(pg1, 245);
+  itemsByPage[2] = autoSlice(pg2, 245);
+  itemsByPage[3] = autoSlice(pg3, 245);
+  itemsByPage[4] = autoSlice(pg4, 245);
+
+  rebuildThumbs(1);
+}
+
+function draw() {
+  background("#fff");
+
+  drawStageFrame();
+
+  if (currentBG) {
+    const fitBG = fitContain(currentBG.width, currentBG.height, W, STAGE_H);
+    imageMode(CENTER);
+    image(currentBG, W/2, STAGE_H/2, fitBG.w, fitBG.h);
+    imageMode(CORNER);
+  }
+
+  for (let L of layers) {
+    push();
+    translate(L.x, L.y);
+    rotate(L.rot);
+    imageMode(CENTER);
+    tint(255, L.opacity);
+    image(L.img, 0, 0, L.w * L.scale, L.h * L.scale);
+    noTint();
+    pop();
+  }
+
+  if (selected) {
+    push();
+    translate(selected.x, selected.y);
+    rotate(selected.rot);
+    noFill(); stroke(PANEL_PINK); strokeWeight(2);
+    rectMode(CENTER);
+    rect(0, 0, selected.w * selected.scale + 6, selected.h * selected.scale + 6, 10);
+    pop();
+  }
+
+  drawTray();
+}
+
+function mouseWheel(event) {
+  if (selected) {
+    selected.scale -= event.delta * 0.0008;
+    selected.scale = constrain(selected.scale, 0.1, 4.0);
+    scaleSlider.slider.value(selected.scale);
+    return false;
+  }
+}
+
+/* ------------------ Updated Mouse interaction ------------------ */
+function mousePressed() {
+  // THE BLOCK FOR CLICKING THUMBNAILS IN THE TRAY HAS BEEN REMOVED.
+  
+  // 1) Click a worn layer on stage (topmost first)
+  for (let i = layers.length - 1; i >= 0; i--) {
+    const L = layers[i];
+    if (pointInLayer(L, mouseX, mouseY)) {
+      selected = L;
+      dragging = true;
+      dragOffset.x = mouseX - L.x;
+      dragOffset.y = mouseY - L.y;
+      syncUI();
+      return;
+    }
+  }
+
+  selected = null;
+}
+
+function mouseDragged() {
+  if (dragging && selected) {
+    selected.x = mouseX - dragOffset.x;
+    selected.y = mouseY - dragOffset.y;
+  }
+}
+
+function mouseReleased() { dragging = false; }
+
+/* ------------------ UI helpers & drawing ------------------ */
+
+function drawStageFrame() {
+  push();
+  noFill();
+  stroke(EDGE);
+  strokeWeight(2);
+  rect(10, 10, W-20, STAGE_H-20, 14);
+  noStroke();
+  fill(PANEL_PINK);
+  rect(W/2 - 140, 18, 280, 34, 18);
+  fill("#fff");
+  textAlign(CENTER, CENTER);
+  textSize(16);
+  text("Make Your Sim", W/2, 35);
+  pop();
+}
+
+function drawTray() {
+  push();
+  noStroke();
+  fill("#f9f6ff");
+  rect(0, STAGE_H, W, TRAY_H);
+  stroke(EDGE);
+  strokeWeight(2);
+  line(10, STAGE_H, W-10, STAGE_H);
+  pop();
+
+  push();
+  fill("#7a6abf");
+  textAlign(CENTER, CENTER);
+  textSize(14);
+  text("Clicking disabled: Drag functionality not yet implemented", W/2, STAGE_H + 18);
+  pop();
+
+  for (let t of thumbs) {
+    push();
+    noFill();
+    stroke("#d0c4ff");
+    rect(t.box.x, t.box.y, t.box.w, t.box.h, 12);
+    pop();
+
+    imageMode(CENTER);
+    image(t.img, t.x, t.y, t.w, t.h);
+  }
+}
+
+function switchPage(idx) {
+  currentPageIndex = idx;
+  rebuildThumbs(idx);
+}
+
+function rebuildThumbs(pageIdx = 1) {
+  const items = itemsByPage[pageIdx] || [];
+  thumbs = [];
+
+  const cols = 6;
+  const tileW = (trayRect.w - 20) / cols;
+  const tileH = 110;
+  const startX = trayRect.x + 10;
+  const startY = trayRect.y + 10;
+
+  for (let i = 0; i < items.length; i++) {
+    const img = items[i];
+    const col = i % cols;
+    const row = Math.floor(i / cols);
+
+    const bx = startX + col * tileW;
+    const by = startY + row * (tileH + 6);
+
+    const fit = fitContain(img.width, img.height, tileW - 12, tileH - 12);
+
+    thumbs.push({
+      img,
+      x: bx + (tileW / 2),
+      y: by + (tileH / 2),
+      w: fit.w,
+      h: fit.h,
+      box: { x: bx, y: by, w: tileW, h: tileH }
+    });
+  }
+}
+
+function autoSlice(srcImg, threshold = 245) {
+  const w = srcImg.width;
+  const h = srcImg.height;
+  const visited = new Array(w * h).fill(false);
+
+  srcImg.loadPixels();
+
+  const isSolid = (idx) => {
+    const r = srcImg.pixels[idx], g = srcImg.pixels[idx+1], b = srcImg.pixels[idx+2];
+    return !(r >= threshold && g >= threshold && b >= threshold);
+  };
+
+  const comps = [];
+
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const p = y * w + x;
+      const pi = p * 4;
+      if (visited[p]) continue;
+      visited[p] = true;
+
+      if (!isSolid(pi)) continue;
+
+      let minX = x, maxX = x, minY = y, maxY = y;
+      const q = [p];
+
+      while (q.length) {
+        const cur = q.pop();
+        const cx = cur % w;
+        const cy = (cur / w) | 0;
+
+        if (cx < minX) minX = cx; if (cx > maxX) maxX = cx;
+        if (cy < minY) minY = cy; if (cy > maxY) maxY = cy;
+
+        const neigh = [cur - 1, cur + 1, cur - w, cur + w];
+        for (let n of neigh) {
+          if (n < 0 || n >= w * h) continue;
+          if (visited[n]) continue;
+          visited[n] = true;
+          const ni = n * 4;
+          if (isSolid(ni)) q.push(n);
+        }
+      }
+
+      const bw = maxX - minX + 1;
+      const bh = maxY - minY + 1;
+
+      if (bw >= 10 && bh >= 10) {
+        comps.push({ x:minX, y:minY, w:bw, h:bh });
+      }
+    }
+  }
+
+  const crops = [];
+  for (let b of comps) {
+    let crop = srcImg.get(b.x, b.y, b.w, b.h);
+    crop = applyTransparency(crop, threshold);
+    crops.push(crop);
+  }
+
+  return crops;
+}
+
+function fitContain(sw, sh, dw, dh) {
+  const s = Math.min(dw / sw, dh / sh);
+  return { w: sw * s, h: sh * s };
+}
+
+function pointInRect(px, py, r) {
+  return (px >= r.x && px <= r.x + r.w && py >= r.y && py <= r.y + r.h);
+}
+
+function pointInLayer(L, px, py) {
+  const dw = L.w * L.scale, dh = L.h * L.scale;
+  const dx = px - L.x, dy = py - L.y;
+  const rx = dx * cos(-L.rot) - dy * sin(-L.rot);
+  const ry = dx * sin(-L.rot) + dy * cos(-L.rot);
+  return (rx > -dw/2 && rx < dw/2 && ry > -dh/2 && ry < dh/2);
+}
+
+function applyTransparency(img, threshold) {
+  const out = img.get();
+  out.loadPixels();
+  for (let i = 0; i < out.pixels.length; i += 4) {
+    const r = out.pixels[i], g = out.pixels[i+1], b = out.pixels[i+2];
+    if (r >= threshold && g >= threshold && b >= threshold) out.pixels[i+3] = 0;
+  }
+  out.updatePixels();
+  return out;
+}
+
+function bringFront(L) {
+  if (!L) return;
+  const i = layers.indexOf(L);
+  if (i >= 0) { layers.splice(i, 1); layers.push(L); }
+}
+
+function sendBack(L) {
+  if (!L) return;
+  const i = layers.indexOf(L);
+  if (i >= 0) { layers.splice(i, 1); layers.unshift(L); }
+}
+
+function deleteSelected() {
+  if (!selected) return;
+  const i = layers.indexOf(selected);
+  if (i >= 0) layers.splice(i, 1);
+  selected = null;
+}
+
+function syncUI() {
+  if (!selected) return;
+  scaleSlider.slider.value(selected.scale);
+  rotSlider.slider.value(degrees(selected.rot));
+  opacitySlider.slider.value(selected.opacity);
+}
+
+function makeButton(label, onClick) {
+  const b = createButton(label);
+  b.style("background", PANEL_PINK);
+  b.style("color", "#1a1020");
+  b.style("border", "none");
+  b.style("padding", "8px 12px");
+  b.style("border-radius", "10px");
+  b.style("font-weight", "700");
+  b.mousePressed(onClick);
+  return b;
+}
+
+function addSlider(labelText, min, max, val, step, onInput) {
+  const wrap = createDiv();
+  const label = createSpan(labelText + " ");
+  const slider = createSlider(min, max, val, step);
+
+  wrap.style("display","inline-block");
+  label.style("margin-right","6px");
+  slider.input(() => onInput(slider.value()));
+
+  label.parent(wrap);
+  slider.parent(wrap);
+  return { wrap, slider };
+}
+
+
+     
